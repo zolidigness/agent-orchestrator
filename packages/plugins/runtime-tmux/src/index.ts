@@ -18,6 +18,33 @@ import {
 const execFileAsync = promisify(execFile);
 const TMUX_COMMAND_TIMEOUT_MS = 5_000;
 
+// sendMessage submit handling. The settle delay must scale with message size:
+// Claude Code folds a large paste into a "[Pasted text #N]" chip and swallows
+// keystrokes while the chip is being built, so a fixed delay loses the race
+// somewhere around 1KB — the Enter vanishes and the message sits typed but
+// never submitted while sendMessage reports success.
+const ENTER_SETTLE_BASE_MS = 300;
+const ENTER_SETTLE_MAX_MS = 2_000;
+const SUBMIT_VERIFY_DELAY_MS = 400;
+const MAX_ENTER_ATTEMPTS = 3;
+
+/**
+ * Heuristic: does the pane tail still show unsubmitted input? Two signals —
+ * the paste chip Claude Code renders for large pastes, and a prompt line
+ * ("❯") that still carries text. Verification is deliberately loose: a false
+ * "pending" costs one extra Enter on an empty input box, which the agent
+ * TUIs treat as a no-op, while a missed pending message is silently dropped.
+ */
+// [ \t] rather than \s in the prompt-line pattern: \s crosses newlines, which
+// would make an empty input box ("❯ " with the box border on the next line)
+// read as pending.
+const PENDING_INPUT_PATTERNS = [/\[Pasted text #\d+/, /^\s*❯[ \t]+\S/m];
+
+function inputStillPending(pane: string): boolean {
+  const tail = pane.split("\n").slice(-8).join("\n");
+  return PENDING_INPUT_PATTERNS.some((pattern) => pattern.test(tail));
+}
+
 export const manifest = {
   name: "tmux",
   slot: "runtime" as const,
@@ -183,10 +210,28 @@ export function create(): Runtime {
         await tmux("send-keys", "-t", handle.id, "-l", message);
       }
 
-      // Small delay to let tmux process the pasted text before pressing Enter.
-      // Without this, Enter can arrive before the text is fully rendered.
-      await sleep(300);
-      await tmux("send-keys", "-t", handle.id, "Enter");
+      // Let the TUI ingest the text before pressing Enter, scaling with size
+      // (see ENTER_SETTLE_BASE_MS). Then verify the input box actually
+      // cleared and re-press Enter if it didn't — a swallowed Enter is
+      // otherwise silent. Best-effort: an unreadable pane counts as
+      // submitted rather than failing the send.
+      const settleMs = Math.min(
+        ENTER_SETTLE_BASE_MS + Math.floor(message.length / 4),
+        ENTER_SETTLE_MAX_MS,
+      );
+      await sleep(settleMs);
+
+      for (let attempt = 1; attempt <= MAX_ENTER_ATTEMPTS; attempt++) {
+        await tmux("send-keys", "-t", handle.id, "Enter");
+        await sleep(SUBMIT_VERIFY_DELAY_MS);
+        let pane: string;
+        try {
+          pane = await tmux("capture-pane", "-t", handle.id, "-p", "-S", "-10");
+        } catch {
+          return;
+        }
+        if (!inputStillPending(pane)) return;
+      }
     },
 
     async getOutput(handle: RuntimeHandle, lines = 50): Promise<string> {

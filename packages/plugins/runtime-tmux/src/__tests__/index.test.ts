@@ -396,14 +396,16 @@ describe("runtime.sendMessage()", () => {
     const runtime = create();
     const handle = makeHandle("msg-short");
 
-    // 1: send-keys C-u (clear), 2: send-keys -l text, 3: send-keys Enter
+    // 1: send-keys C-u (clear), 2: send-keys -l text, 3: send-keys Enter,
+    // 4: capture-pane (submit verification — empty input box)
     mockTmuxSuccess();
     mockTmuxSuccess();
     mockTmuxSuccess();
+    mockTmuxSuccess("╭──╮\n❯ \n╰──╯");
 
     await runtime.sendMessage(handle, "hello world");
 
-    expect(mockExecFileCustom).toHaveBeenCalledTimes(3);
+    expect(mockExecFileCustom).toHaveBeenCalledTimes(4);
 
     // Call 0: Clear partial input
     expect(mockExecFileCustom).toHaveBeenNthCalledWith(
@@ -428,6 +430,14 @@ describe("runtime.sendMessage()", () => {
       ["send-keys", "-t", "msg-short", "Enter"],
       expectedTmuxOptions,
     );
+
+    // Call 3: capture-pane to verify the input box cleared
+    expect(mockExecFileCustom).toHaveBeenNthCalledWith(
+      4,
+      "tmux",
+      ["capture-pane", "-t", "msg-short", "-p", "-S", "-10"],
+      expectedTmuxOptions,
+    );
   });
 
   it("uses load-buffer + paste-buffer for long text (> 200 chars)", async () => {
@@ -435,16 +445,18 @@ describe("runtime.sendMessage()", () => {
     const handle = makeHandle("msg-long");
     const longText = "x".repeat(250);
 
-    // 1: C-u, 2: load-buffer, 3: paste-buffer, 4: unlinkSync (sync), 5: delete-buffer, 6: Enter
+    // 1: C-u, 2: load-buffer, 3: paste-buffer, 4: unlinkSync (sync),
+    // 5: delete-buffer, 6: Enter, 7: capture-pane (verification)
     mockTmuxSuccess(); // C-u
     mockTmuxSuccess(); // load-buffer
     mockTmuxSuccess(); // paste-buffer
     mockTmuxSuccess(); // delete-buffer (finally block)
     mockTmuxSuccess(); // Enter
+    mockTmuxSuccess("╭──╮\n❯ \n╰──╯"); // capture-pane: input box empty
 
     await runtime.sendMessage(handle, longText);
 
-    expect(mockExecFileCustom).toHaveBeenCalledTimes(5);
+    expect(mockExecFileCustom).toHaveBeenCalledTimes(6);
 
     // Call 0: clear
     expect(mockExecFileCustom).toHaveBeenNthCalledWith(
@@ -497,6 +509,7 @@ describe("runtime.sendMessage()", () => {
     mockTmuxSuccess(); // paste-buffer
     mockTmuxSuccess(); // delete-buffer (finally)
     mockTmuxSuccess(); // Enter
+    mockTmuxSuccess("╭──╮\n❯ \n╰──╯"); // capture-pane: input box empty
 
     await runtime.sendMessage(handle, "line1\nline2\nline3");
 
@@ -546,6 +559,81 @@ describe("runtime.sendMessage()", () => {
       ["delete-buffer", "-b", "ao-test-uuid-1234"],
       expectedTmuxOptions,
     );
+  });
+
+  it("re-presses Enter when the paste chip is still in the input box", async () => {
+    const runtime = create();
+    const handle = makeHandle("msg-retry");
+
+    mockTmuxSuccess(); // C-u
+    mockTmuxSuccess(); // send-keys -l
+    mockTmuxSuccess(); // Enter (swallowed by the TUI)
+    mockTmuxSuccess("╭──╮\n❯ [Pasted text #3]\n╰──╯"); // capture: chip still pending
+    mockTmuxSuccess(); // Enter retry
+    mockTmuxSuccess("╭──╮\n❯ \n╰──╯"); // capture: input box cleared
+
+    await runtime.sendMessage(handle, "hello world");
+
+    const enterCalls = mockExecFileCustom.mock.calls.filter(
+      (c) => Array.isArray(c[1]) && c[1].includes("Enter"),
+    );
+    expect(enterCalls).toHaveLength(2);
+  });
+
+  it("also treats a prompt line still carrying text as unsubmitted", async () => {
+    const runtime = create();
+    const handle = makeHandle("msg-retry-text");
+
+    mockTmuxSuccess(); // C-u
+    mockTmuxSuccess(); // send-keys -l
+    mockTmuxSuccess(); // Enter (swallowed)
+    mockTmuxSuccess("╭──╮\n❯ hello world\n╰──╯"); // capture: text still in the box
+    mockTmuxSuccess(); // Enter retry
+    mockTmuxSuccess("╭──╮\n❯ \n╰──╯"); // capture: cleared
+
+    await runtime.sendMessage(handle, "hello world");
+
+    const enterCalls = mockExecFileCustom.mock.calls.filter(
+      (c) => Array.isArray(c[1]) && c[1].includes("Enter"),
+    );
+    expect(enterCalls).toHaveLength(2);
+  });
+
+  it("gives up after the bounded number of Enter attempts", async () => {
+    const runtime = create();
+    const handle = makeHandle("msg-giveup");
+
+    mockTmuxSuccess(); // C-u
+    mockTmuxSuccess(); // send-keys -l
+    for (let i = 0; i < 3; i++) {
+      mockTmuxSuccess(); // Enter
+      mockTmuxSuccess("╭──╮\n❯ [Pasted text #1]\n╰──╯"); // capture: still pending
+    }
+
+    // Resolves rather than throwing — verification is best-effort
+    await runtime.sendMessage(handle, "hello world");
+
+    const enterCalls = mockExecFileCustom.mock.calls.filter(
+      (c) => Array.isArray(c[1]) && c[1].includes("Enter"),
+    );
+    expect(enterCalls).toHaveLength(3);
+  });
+
+  it("treats a capture-pane failure as submitted", async () => {
+    const runtime = create();
+    const handle = makeHandle("msg-noverify");
+
+    mockTmuxSuccess(); // C-u
+    mockTmuxSuccess(); // send-keys -l
+    mockTmuxSuccess(); // Enter
+    mockTmuxError("no such pane"); // capture-pane fails
+
+    await runtime.sendMessage(handle, "hello world");
+
+    const enterCalls = mockExecFileCustom.mock.calls.filter(
+      (c) => Array.isArray(c[1]) && c[1].includes("Enter"),
+    );
+    expect(enterCalls).toHaveLength(1);
   });
 });
 
