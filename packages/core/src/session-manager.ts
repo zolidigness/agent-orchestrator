@@ -313,6 +313,29 @@ function isFixedOrchestratorReservationError(err: unknown, sessionId: string): b
   return err instanceof Error && err.message.includes(`Orchestrator session "${sessionId}" already exists`);
 }
 
+/**
+ * A merged PR flips the lifecycle terminal (isTerminalSession checks
+ * pr.state === "merged") while the agent may still be alive and idle in
+ * merged_waiting_decision. For message delivery that verdict must not be
+ * trusted on its own: restoring on it destroys a healthy runtime
+ * mid-conversation (observed live 2026-08-20 — a send to an idle session
+ * whose PR had just merged killed and force-resumed it). When the
+ * terminality stems only from the merge, the live probes decide instead.
+ */
+function isTerminalOnlyBecauseMerged(session: {
+  lifecycle?: CanonicalSessionLifecycle;
+}): boolean {
+  const lc = session.lifecycle;
+  if (!lc) return false;
+  return (
+    lc.pr.state === "merged" &&
+    lc.session.state !== "done" &&
+    lc.session.state !== "terminated" &&
+    lc.runtime.state !== "missing" &&
+    lc.runtime.state !== "exited"
+  );
+}
+
 async function getTmuxForegroundCommand(sessionName: string): Promise<string | null> {
   try {
     const { stdout } = await execFileAsync(
@@ -1352,9 +1375,9 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
               .replace(/[^a-z0-9]+/g, "-")
               .slice(0, 60)
               .replace(/^-+|-+$/g, "");
-        branch = `feat/${slug || sessionId}`;
+        branch = `${project.branchPrefix ?? "feat/"}${slug || sessionId}`;
       } else {
-        branch = `session/${sessionId}`;
+        branch = `${project.branchPrefix ?? "session/"}${sessionId}`;
       }
 
       // Create workspace (if workspace plugin is available)
@@ -1489,7 +1512,10 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
           ...environment,
           ...(opencodeConfigFile ? { OPENCODE_CONFIG: opencodeConfigFile } : {}),
           ...(project.env ?? {}),
-          PATH: buildAgentPath(environment["PATH"] ?? process.env["PATH"]),
+          PATH: buildAgentPath(
+            environment["PATH"] ?? process.env["PATH"],
+            project.env?.["PATH"],
+          ),
           GH_PATH: PREFERRED_GH_PATH,
           ...(process.env["AO_AGENT_GH_TRACE"] && {
             AO_AGENT_GH_TRACE: process.env["AO_AGENT_GH_TRACE"],
@@ -1958,7 +1984,10 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         environment: {
           ...environment,
           ...(project.env ?? {}),
-          PATH: buildAgentPath(environment["PATH"] ?? process.env["PATH"]),
+          PATH: buildAgentPath(
+            environment["PATH"] ?? process.env["PATH"],
+            project.env?.["PATH"],
+          ),
           GH_PATH: PREFERRED_GH_PATH,
           ...(process.env["AO_AGENT_GH_TRACE"] && {
             AO_AGENT_GH_TRACE: process.env["AO_AGENT_GH_TRACE"],
@@ -2936,25 +2965,24 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       let stablePolls = 0;
 
       while (true) {
-        const [runtimeAlive, processRunning, output, foregroundCommand] = await Promise.all([
+        const [runtimeAlive, processRunning, output] = await Promise.all([
           runtimePlugin.isAlive(handle).catch(() => true),
           isAgentProcessNotDefinitelyMissing(agentPlugin, handle),
           captureOutput(handle),
-          handle.runtimeName === "tmux"
-            ? getTmuxForegroundCommand(handle.id)
-            : Promise.resolve(agentPlugin.processName),
         ]);
 
         const outputReady = output.trim().length > 0;
-        const foregroundReady =
-          foregroundCommand === null || foregroundCommand === agentPlugin.processName;
+        // No foreground-command check here: pane_current_command reports the
+        // launch-script wrapper ("bash") for a healthy wrapped agent, which
+        // would keep this loop waiting out its full timeout on every
+        // bootstrap send. The process probe plus settled output carries the
+        // same signal without that artifact.
         const settledOutput = outputReady ? output.trimEnd() : null;
         const isStable = settledOutput !== null && settledOutput === lastSettledOutput;
 
         if (
           runtimeAlive &&
           processRunning &&
-          foregroundReady &&
           (hasQueuedMessage(output) || isStable)
         ) {
           stablePolls += 1;
@@ -2992,10 +3020,18 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
             : Promise.resolve(agentPlugin.processName),
         ]);
 
-        const foregroundReady =
+        // pane_current_command reports the launch-script wrapper ("bash")
+        // for a healthy wrapped agent, so a foreground mismatch is not
+        // evidence the agent is missing — the process probe is. The
+        // foreground match only serves as a fallback signal when the probe
+        // says the process is gone but output suggests otherwise.
+        const foregroundIsAgent =
           foregroundCommand === null || foregroundCommand === agentPlugin.processName;
 
-        if (runtimeAlive && foregroundReady && (processRunning || output.trim().length > 0)) {
+        if (
+          runtimeAlive &&
+          (processRunning || (foregroundIsAgent && output.trim().length > 0))
+        ) {
           return true;
         }
 
@@ -3055,6 +3091,17 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
       const normalized = current.runtimeHandle ? current : { ...current, runtimeHandle: handle };
 
       if (forceRestore || isRestorable(normalized)) {
+        // See isTerminalOnlyBecauseMerged: a merged PR alone is a policy
+        // verdict, not evidence the process is gone. Probe before destroying.
+        if (!forceRestore && isTerminalOnlyBecauseMerged(normalized)) {
+          const [alive, running] = await Promise.all([
+            runtimePlugin.isAlive(handle).catch(() => true),
+            isAgentProcessNotDefinitelyMissing(agentPlugin, handle),
+          ]);
+          if (alive && running) {
+            return normalized;
+          }
+        }
         return restoreForDelivery(
           forceRestore
             ? "session needed to be restarted before delivery"
@@ -3484,6 +3531,19 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         if (plugins.workspace.postCreate) {
           await plugins.workspace.postCreate(wsInfo, project);
         }
+
+        // Re-install agent workspace hooks: the recreated worktree is a clean
+        // checkout, so the .claude/ settings and metadata hooks written at
+        // spawn time are gone. Without this, restored sessions silently lose
+        // PR tracking and agent settings (mirrors the spawn path).
+        if (plugins.agent.setupWorkspaceHooks) {
+          await plugins.agent.setupWorkspaceHooks(workspacePath, {
+            dataDir: getProjectSessionsDir(projectId),
+          });
+        }
+        if (plugins.agent.name !== "claude-code") {
+          await setupPathWrapperWorkspace(workspacePath);
+        }
       } catch (err) {
         recordActivityEvent({
           projectId,
@@ -3622,7 +3682,10 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         ...environment,
         ...(opencodeConfigPath ? { OPENCODE_CONFIG: opencodeConfigPath } : {}),
         ...(project.env ?? {}),
-        PATH: buildAgentPath(environment["PATH"] ?? process.env["PATH"]),
+        PATH: buildAgentPath(
+          environment["PATH"] ?? process.env["PATH"],
+          project.env?.["PATH"],
+        ),
         GH_PATH: PREFERRED_GH_PATH,
         ...(process.env["AO_AGENT_GH_TRACE"] && {
           AO_AGENT_GH_TRACE: process.env["AO_AGENT_GH_TRACE"],

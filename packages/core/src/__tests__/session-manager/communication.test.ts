@@ -86,6 +86,68 @@ describe("send", () => {
     );
   });
 
+  it("delivers to a live session whose lifecycle is terminal only because its PR merged", async () => {
+    // A merged PR flips the lifecycle terminal while the agent sits alive and
+    // idle in merged_waiting_decision. Send must probe and deliver — not
+    // destroy the healthy runtime and force a restore (live incident
+    // 2026-08-20: an ao send killed an idle 400K-token session whose PR had
+    // just merged).
+    const wsPath = join(tmpDir, "ws-app-1");
+    mkdirSync(wsPath, { recursive: true });
+
+    const now = new Date().toISOString();
+    writeMetadata(sessionsDir, "app-1", {
+      worktree: wsPath,
+      branch: "feat/TEST-1",
+      status: "merged",
+      project: "my-app",
+      issue: "TEST-1",
+      runtimeHandle: makeHandle("rt-live"),
+      lifecycle: {
+        version: 2,
+        session: {
+          kind: "worker",
+          state: "idle",
+          reason: "merged_waiting_decision",
+          startedAt: now,
+          completedAt: null,
+          terminatedAt: null,
+          lastTransitionAt: now,
+        },
+        pr: {
+          state: "merged",
+          reason: "merged",
+          number: 342,
+          url: "https://example.com/pr/342",
+          lastObservedAt: now,
+        },
+        runtime: {
+          state: "alive",
+          reason: "process_running",
+          lastObservedAt: now,
+          handle: makeHandle("rt-live"),
+          tmuxName: "app-1",
+        },
+      },
+    });
+
+    vi.mocked(mockRuntime.isAlive).mockResolvedValue(true);
+    vi.mocked(mockAgent.isProcessRunning).mockResolvedValue(true);
+    vi.mocked(mockRuntime.getOutput)
+      .mockResolvedValueOnce("before send")
+      .mockResolvedValueOnce("after send");
+
+    const sm = createSessionManager({ config, registry: mockRegistry });
+    await sm.send("app-1", "PR merged — please wrap up");
+
+    expect(mockRuntime.destroy).not.toHaveBeenCalled();
+    expect(mockRuntime.create).not.toHaveBeenCalled();
+    expect(mockRuntime.sendMessage).toHaveBeenCalledWith(
+      makeHandle("rt-live"),
+      "PR merged — please wrap up",
+    );
+  });
+
   it("throws when a killed session cannot be restored to a ready state for delivery", async () => {
     vi.useFakeTimers();
     try {
