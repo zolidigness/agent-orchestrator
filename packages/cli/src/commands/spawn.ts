@@ -204,6 +204,8 @@ async function spawnSession(
   agent?: string,
   claimOptions?: SpawnClaimOptions,
   prompt?: string,
+  model?: string,
+  effort?: string,
 ): Promise<void> {
   const spinner = ora("Creating session").start();
 
@@ -236,6 +238,8 @@ async function spawnSession(
       issueId,
       agent,
       prompt: sanitizedPrompt,
+      model,
+      effort,
     });
 
     let claimedPrUrl: string | null = null;
@@ -308,6 +312,11 @@ export function registerSpawn(program: Command): void {
       "--prompt <text>",
       "Initial prompt/instructions for the agent (use instead of an issue)",
     )
+    .option("--model <model>", "Override the model for this session (e.g. claude-fable-5, opus)")
+    .option(
+      "--effort <level>",
+      "Reasoning effort for this session (low, medium, high, xhigh, max)",
+    )
     .action(
       async (
         issue: string | undefined,
@@ -317,6 +326,8 @@ export function registerSpawn(program: Command): void {
           claimPr?: string;
           assignOnGithub?: boolean;
           prompt?: string;
+          model?: string;
+          effort?: string;
         },
         command: Command,
       ) => {
@@ -343,6 +354,16 @@ export function registerSpawn(program: Command): void {
 
         if (!opts.claimPr && opts.assignOnGithub) {
           console.error(chalk.red("--assign-on-github requires --claim-pr on `ao spawn`."));
+          process.exit(1);
+        }
+
+        const VALID_EFFORT_LEVELS = ["low", "medium", "high", "xhigh", "max"];
+        if (opts.effort && !VALID_EFFORT_LEVELS.includes(opts.effort)) {
+          console.error(
+            chalk.red(
+              `Invalid --effort "${opts.effort}". Valid levels: ${VALID_EFFORT_LEVELS.join(", ")}`,
+            ),
+          );
           process.exit(1);
         }
 
@@ -381,6 +402,8 @@ export function registerSpawn(program: Command): void {
             opts.agent,
             claimOptions,
             opts.prompt,
+            opts.model,
+            opts.effort,
           );
         } catch (err) {
           console.error(chalk.red(`✗ ${err instanceof Error ? err.message : String(err)}`));

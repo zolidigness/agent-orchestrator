@@ -255,14 +255,38 @@ describe("getLaunchCommand", () => {
     expect(cmd).toContain("--dangerously-skip-permissions");
   });
 
-  it("maps permissions=auto-edit to no-prompt mode on Claude", () => {
+  it("maps permissions=auto-edit to acceptEdits permission mode on Claude", () => {
     const cmd = agent.getLaunchCommand(makeLaunchConfig({ permissions: "auto-edit" }));
-    expect(cmd).toContain("--dangerously-skip-permissions");
+    expect(cmd).toContain("--permission-mode acceptEdits");
+    expect(cmd).not.toContain("--dangerously-skip-permissions");
+  });
+
+  it("maps permissions=auto to auto permission mode on Claude", () => {
+    const cmd = agent.getLaunchCommand(makeLaunchConfig({ permissions: "auto" }));
+    expect(cmd).toContain("--permission-mode auto");
+    expect(cmd).not.toContain("--dangerously-skip-permissions");
   });
 
   it("shell-escapes model argument", () => {
     const cmd = agent.getLaunchCommand(makeLaunchConfig({ model: "claude-opus-4-6" }));
     expect(cmd).toContain("--model 'claude-opus-4-6'");
+  });
+
+  it("passes --effort when provided", () => {
+    const cmd = agent.getLaunchCommand(makeLaunchConfig({ effort: "xhigh" }));
+    expect(cmd).toContain("--effort 'xhigh'");
+  });
+
+  it("omits --effort when not provided", () => {
+    const cmd = agent.getLaunchCommand(makeLaunchConfig());
+    expect(cmd).not.toContain("--effort");
+  });
+
+  it("combines model and effort", () => {
+    const cmd = agent.getLaunchCommand(
+      makeLaunchConfig({ model: "claude-fable-5", effort: "high" }),
+    );
+    expect(cmd).toContain("--model 'claude-fable-5' --effort 'high'");
   });
 
   it("includes prompt as positional argument with -- separator (not -p flag)", () => {

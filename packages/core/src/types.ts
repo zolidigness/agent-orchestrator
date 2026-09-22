@@ -378,6 +378,10 @@ export interface SessionSpawnConfig {
   agent?: string;
   /** Override the OpenCode subagent for this session (e.g. "sisyphus", "oracle") */
   subagent?: string;
+  /** Override the model for this session, taking precedence over project agentConfig */
+  model?: string;
+  /** Reasoning effort for this session (agents without an effort concept ignore it) */
+  effort?: string;
 }
 
 /** Config for creating an orchestrator session */
@@ -596,6 +600,11 @@ export interface AgentLaunchConfig {
   prompt?: string;
   permissions?: AgentPermissionInput;
   model?: string;
+  /**
+   * Reasoning effort for agents that support it (Claude Code: --effort).
+   * Agents without an effort concept ignore this.
+   */
+  effort?: string;
   /**
    * System prompt to pass to the agent for orchestrator context.
    * - Claude Code: --append-system-prompt
@@ -1694,7 +1703,7 @@ export interface OpenCodeAgentConfig extends AgentSpecificConfig {
  * Note: Not every agent exposes all granular policies; plugins map these modes to
  * their closest supported behavior.
  */
-export type AgentPermissionMode = "permissionless" | "default" | "auto-edit" | "suggest";
+export type AgentPermissionMode = "permissionless" | "default" | "auto" | "auto-edit" | "suggest";
 
 /** Backward-compatible legacy alias accepted in config parsing. */
 export type LegacyAgentPermissionMode = "skip";
@@ -1710,6 +1719,7 @@ export function normalizeAgentPermissionMode(
   if (
     mode !== "permissionless" &&
     mode !== "default" &&
+    mode !== "auto" &&
     mode !== "auto-edit" &&
     mode !== "suggest"
   ) {

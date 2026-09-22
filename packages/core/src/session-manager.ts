@@ -1483,7 +1483,8 @@ export function createSessionManager(deps: SessionManagerDeps): OpenCodeSessionM
         prompt: taskPrompt,
         systemPromptFile,
         permissions: selection.permissions,
-        model: selection.model,
+        model: spawnConfig.model ?? selection.model,
+        effort: spawnConfig.effort,
         subagent: spawnConfig.subagent ?? selection.subagent,
       };
 

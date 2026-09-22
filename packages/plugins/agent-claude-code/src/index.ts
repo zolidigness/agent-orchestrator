@@ -1064,12 +1064,20 @@ function createClaudeCodeAgent(): Agent {
       const parts: string[] = ["claude"];
 
       const permissionMode = normalizeAgentPermissionMode(config.permissions);
-      if (permissionMode === "permissionless" || permissionMode === "auto-edit") {
+      if (permissionMode === "permissionless") {
         parts.push("--dangerously-skip-permissions");
+      } else if (permissionMode === "auto") {
+        parts.push("--permission-mode", "auto");
+      } else if (permissionMode === "auto-edit") {
+        parts.push("--permission-mode", "acceptEdits");
       }
 
       if (config.model) {
         parts.push("--model", shellEscape(config.model));
+      }
+
+      if (config.effort) {
+        parts.push("--effort", shellEscape(config.effort));
       }
 
       if (config.systemPromptFile) {
@@ -1207,8 +1215,12 @@ function createClaudeCodeAgent(): Agent {
       const parts: string[] = ["claude", "--resume", shellEscape(sessionUuid)];
 
       const permissionMode = normalizeAgentPermissionMode(project.agentConfig?.permissions);
-      if (permissionMode === "permissionless" || permissionMode === "auto-edit") {
+      if (permissionMode === "permissionless") {
         parts.push("--dangerously-skip-permissions");
+      } else if (permissionMode === "auto") {
+        parts.push("--permission-mode", "auto");
+      } else if (permissionMode === "auto-edit") {
+        parts.push("--permission-mode", "acceptEdits");
       }
 
       if (project.agentConfig?.model) {
