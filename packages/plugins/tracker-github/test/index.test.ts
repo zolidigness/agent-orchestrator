@@ -96,6 +96,7 @@ describe("tracker-github plugin", () => {
         state: "open",
         labels: ["bug", "priority-high"],
         assignee: "alice",
+        branchName: "feat/123-fix-login-bug",
       });
     });
 

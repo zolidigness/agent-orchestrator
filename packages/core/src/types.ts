@@ -1539,6 +1539,9 @@ export interface ProjectConfig {
   /** Default branch (main, master, next, develop, etc.) */
   defaultBranch: string;
 
+  /** Prefix for agent branch names (e.g. "zdigness/"); replaces the default "feat/". */
+  branchPrefix?: string;
+
   /** Session name prefix (e.g. "app" → "app-1", "app-2") */
   sessionPrefix: string;
 

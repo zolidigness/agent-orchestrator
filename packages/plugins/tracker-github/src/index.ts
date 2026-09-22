@@ -208,6 +208,16 @@ function createGitHubTracker(): Tracker {
           assignees: Array<{ login: string }>;
         } = JSON.parse(raw);
 
+        // Branch name from the issue title, capped at 32 chars of slug so
+        // branches stay readable (e.g. "zdigness/368-add-health-endpoint").
+        const slug = data.title
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, "-")
+          .replace(/^-+|-+$/g, "")
+          .slice(0, 32)
+          .replace(/-+$/, "");
+        const prefix = project.branchPrefix ?? "feat/";
+
         const issue: Issue = {
           id: String(data.number),
           title: data.title,
@@ -216,6 +226,7 @@ function createGitHubTracker(): Tracker {
           state: mapState(data.state, data.stateReason),
           labels: data.labels.map((l) => l.name),
           assignee: data.assignees[0]?.login,
+          branchName: slug ? `${prefix}${data.number}-${slug}` : `${prefix}issue-${data.number}`,
         };
 
         writeCachedIssue(repo, identifier, issue);
@@ -255,9 +266,9 @@ function createGitHubTracker(): Tracker {
       return lastPart ? `#${lastPart}` : url;
     },
 
-    branchName(identifier: string, _project: ProjectConfig): string {
+    branchName(identifier: string, project: ProjectConfig): string {
       const num = identifier.replace(/^#/, "");
-      return `feat/issue-${num}`;
+      return `${project.branchPrefix ?? "feat/"}issue-${num}`;
     },
 
     async generatePrompt(identifier: string, project: ProjectConfig): Promise<string> {

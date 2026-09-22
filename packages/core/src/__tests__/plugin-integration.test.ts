@@ -275,12 +275,13 @@ describe("plugin integration", () => {
         issueId: "99",
       });
 
-      // tracker-github.branchName("99", project) → "feat/issue-99"
-      expect(session.branch).toBe("feat/issue-99");
+      // tracker-github getIssue() derives the branch from the issue title
+      // (prefix defaults to "feat/" when project.branchPrefix is unset)
+      expect(session.branch).toBe("feat/99-test-issue");
 
       // Workspace should have been called with the tracker-derived branch
       expect(mockWorkspace.create).toHaveBeenCalledWith(
-        expect.objectContaining({ branch: "feat/issue-99" }),
+        expect.objectContaining({ branch: "feat/99-test-issue" }),
       );
     });
 

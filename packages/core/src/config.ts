@@ -249,6 +249,8 @@ const ProjectConfigSchema = z.object({
   repo: z.string().optional(),
   path: z.string(),
   defaultBranch: z.string().default("main"),
+  /** Prefix for agent branch names (e.g. "zdigness/"); replaces the default "feat/". */
+  branchPrefix: z.string().optional(),
   sessionPrefix: z
     .string()
     .regex(/^[a-zA-Z0-9_-]+$/, "sessionPrefix must match [a-zA-Z0-9_-]+")
