@@ -79,6 +79,7 @@ import {
   resolvePREnrichmentDecision,
   resolvePRLiveDecision,
   resolveProbeDecision,
+  resolveTerminalPRStateDecision,
   type LifecycleDecision,
 } from "./lifecycle-status-decisions.js";
 import { dedupePrInfos } from "./utils/pr.js";
@@ -542,6 +543,47 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
   ): PREnrichmentData | undefined {
     if (!session.pr) return undefined;
     return prEnrichmentCache.get(`${session.pr.owner}/${session.pr.repo}#${session.pr.number}`);
+  }
+
+  /**
+   * SCM ground truth outranks probe confusion: when every PR on a session has
+   * reached a terminal state (merged/closed), the agent process exiting is
+   * expected, not a fault. Without this check a session whose runtime pane
+   * outlives the agent process wedges in detecting/stuck (signal_disagreement)
+   * and never reaches MERGED — so maybeAutoCleanupOnMerge never tears down the
+   * very runtime the probe keeps seeing as alive. Consults the enrichment
+   * cache first, falling back to a live getPRState per PR on cache miss.
+   */
+  async function resolveTerminalPRRescueDecision(
+    session: Session,
+    scm: SCM | null,
+  ): Promise<LifecycleDecision | null> {
+    if (!scm) return null;
+    const sessionPRs = normalizeSessionPRs(session);
+    if (sessionPRs.length === 0) return null;
+    try {
+      const states = await Promise.all(
+        sessionPRs.map(
+          (p) => prEnrichmentCache.get(`${p.owner}/${p.repo}#${p.number}`)?.state ?? scm.getPRState(p),
+        ),
+      );
+      if (!states.every((s) => s === "merged" || s === "closed")) return null;
+      return resolveTerminalPRStateDecision(states.every((s) => s === "merged") ? "merged" : "closed");
+    } catch (err) {
+      recordActivityEvent({
+        projectId: session.projectId,
+        sessionId: session.id,
+        source: "scm",
+        kind: "scm.poll_pr_failed",
+        level: "warn",
+        summary: `terminal PR rescue check failed for ${session.id}`,
+        data: {
+          prNumbers: sessionPRs.map((p) => p.number),
+          errorMessage: err instanceof Error ? err.message : String(err),
+        },
+      });
+      return null;
+    }
   }
 
   /** Repos where Guard 1 returned 304 in the current poll — safe to skip detectPR. */
@@ -1335,6 +1377,20 @@ export function createLifecycleManager(deps: LifecycleManagerDeps): LifecycleMan
       previousEvidenceHash: currentDetectingEvidenceHash,
     });
     if (probeDecision) {
+      const isRecoverableProbeState =
+        probeDecision.status === SESSION_STATUS.DETECTING ||
+        probeDecision.status === SESSION_STATUS.STUCK;
+      if (isRecoverableProbeState) {
+        const rescueDecision = await resolveTerminalPRRescueDecision(session, scm);
+        if (rescueDecision) {
+          if (session.pr) {
+            lifecycle.pr.number = session.pr.number;
+            lifecycle.pr.url = session.pr.url;
+            lifecycle.pr.lastObservedAt = nowIso;
+          }
+          return commit(rescueDecision);
+        }
+      }
       return commit(probeDecision);
     }
 

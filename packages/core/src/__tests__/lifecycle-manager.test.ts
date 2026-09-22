@@ -1743,6 +1743,110 @@ describe("check (single session)", () => {
     }
   });
 
+  it("resolves merged PR when the agent process exited but the runtime pane survives", async () => {
+    // Regression: runtime=alive + process=dead used to short-circuit into the
+    // signal_disagreement detecting/stuck path before the PR check ran, so a
+    // merged session whose agent had exited could never reach MERGED status —
+    // and maybeAutoCleanupOnMerge (gated on MERGED) never removed it.
+    vi.useFakeTimers();
+    try {
+      const pr = makeMatchingPR();
+      const mockSCM = createMockSCM({
+        getPRState: vi.fn().mockResolvedValue("merged"),
+        enrichSessionsPRBatch: mockBatchEnrichment({ state: "merged", ciStatus: "none" }),
+      });
+      const registry = createMockRegistry({
+        runtime: plugins.runtime,
+        agent: plugins.agent,
+        scm: mockSCM,
+      });
+      vi.mocked(plugins.runtime.isAlive).mockResolvedValue(true);
+      vi.mocked(plugins.agent.getActivityState).mockResolvedValue({ state: "exited" });
+
+      const lm = setupPollCheck("app-1", {
+        session: makeSession({ status: "pr_open", pr }),
+        registry,
+      });
+
+      lm.start(60_000);
+      await vi.advanceTimersByTimeAsync(0);
+      lm.stop();
+
+      expect(lm.getStates().get("app-1")).toBe("merged");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("rescues a session already stuck on probe_failure once its PR is merged", async () => {
+    vi.useFakeTimers();
+    try {
+      const pr = makeMatchingPR();
+      const mockSCM = createMockSCM({
+        getPRState: vi.fn().mockResolvedValue("merged"),
+        enrichSessionsPRBatch: mockBatchEnrichment({ state: "merged", ciStatus: "none" }),
+      });
+      const registry = createMockRegistry({
+        runtime: plugins.runtime,
+        agent: plugins.agent,
+        scm: mockSCM,
+      });
+      vi.mocked(plugins.runtime.isAlive).mockResolvedValue(true);
+      vi.mocked(plugins.agent.getActivityState).mockResolvedValue({ state: "exited" });
+
+      const lm = setupPollCheck("app-1", {
+        session: makeSession({
+          status: "stuck",
+          pr,
+          metadata: { detectingAttempts: "4" },
+        }),
+        registry,
+        metaOverrides: { detectingAttempts: "4" },
+      });
+
+      lm.start(60_000);
+      await vi.advanceTimersByTimeAsync(0);
+      lm.stop();
+
+      expect(lm.getStates().get("app-1")).toBe("merged");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps the probe detecting/stuck path when the PR is still open", async () => {
+    // An agent dying mid-work on an OPEN PR is a real fault — the merged-PR
+    // override must not swallow it.
+    vi.useFakeTimers();
+    try {
+      const pr = makeMatchingPR();
+      const mockSCM = createMockSCM({
+        getPRState: vi.fn().mockResolvedValue("open"),
+        enrichSessionsPRBatch: mockBatchEnrichment({ state: "open", ciStatus: "passing" }),
+      });
+      const registry = createMockRegistry({
+        runtime: plugins.runtime,
+        agent: plugins.agent,
+        scm: mockSCM,
+      });
+      vi.mocked(plugins.runtime.isAlive).mockResolvedValue(true);
+      vi.mocked(plugins.agent.getActivityState).mockResolvedValue({ state: "exited" });
+
+      const lm = setupPollCheck("app-1", {
+        session: makeSession({ status: "pr_open", pr }),
+        registry,
+      });
+
+      lm.start(60_000);
+      await vi.advanceTimersByTimeAsync(0);
+      lm.stop();
+
+      expect(lm.getStates().get("app-1")).toBe("detecting");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps closed PR sessions idle and emits a PR-closed notification", async () => {
     const mockSCM = createMockSCM({
       getPRState: vi.fn().mockResolvedValue("closed"),

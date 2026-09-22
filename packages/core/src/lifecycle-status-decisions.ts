@@ -165,7 +165,7 @@ export function createDetectingDecision(
   });
 }
 
-function resolveTerminalPRStateDecision(
+export function resolveTerminalPRStateDecision(
   prState: PREnrichmentData["state"] | "open",
 ): LifecycleDecision | null {
   if (prState === PR_STATE.MERGED) {
