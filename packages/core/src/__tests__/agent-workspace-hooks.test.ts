@@ -70,6 +70,29 @@ describe("buildAgentPath", () => {
     expect(aoIdx).toBe(0);
     expect(ghIdx).toBe(1);
   });
+
+  it("inserts pathPrefix after wrapper dirs but ahead of inherited PATH", () => {
+    const result = buildAgentPath("/usr/bin:/bin", "/opt/conda/envs/py312/bin");
+    const entries = result.split(":");
+    expect(entries.indexOf(AO_BIN_DIR)).toBe(0);
+    expect(entries.indexOf("/usr/local/bin")).toBe(1);
+    expect(entries.indexOf("/opt/conda/envs/py312/bin")).toBe(2);
+    expect(entries.indexOf("/opt/conda/envs/py312/bin")).toBeLessThan(entries.indexOf("/usr/bin"));
+  });
+
+  it("supports multi-entry pathPrefix and dedupes against inherited PATH", () => {
+    const result = buildAgentPath("/usr/bin:/opt/tools/bin", "/opt/conda/bin:/opt/tools/bin");
+    const entries = result.split(":");
+    expect(entries.filter((e) => e === "/opt/tools/bin").length).toBe(1);
+    expect(entries.indexOf("/opt/conda/bin")).toBeLessThan(entries.indexOf("/usr/bin"));
+    expect(entries.indexOf("/opt/tools/bin")).toBeLessThan(entries.indexOf("/usr/bin"));
+  });
+
+  it("pathPrefix cannot shadow the ao wrapper dir", () => {
+    const result = buildAgentPath("/usr/bin", `/opt/conda/bin:${AO_BIN_DIR}`);
+    const entries = result.split(":");
+    expect(entries.indexOf(AO_BIN_DIR)).toBe(0);
+  });
 });
 
 describe("setupPathWrapperWorkspace (Unix)", () => {

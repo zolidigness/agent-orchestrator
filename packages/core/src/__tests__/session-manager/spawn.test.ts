@@ -159,7 +159,7 @@ describe("spawn", () => {
     expect(call?.environment?.AO_PROJECT_ID).toBe("my-app");
   });
 
-  it("PATH and GH_PATH override project.env values with the same key", async () => {
+  it("project.env PATH is merged as a prefix; wrappers stay first and GH_PATH is not overridable", async () => {
     const projectConfig = config.projects["my-app"];
     if (!projectConfig) throw new Error("test setup: my-app missing");
     const configWithEnv: OrchestratorConfig = {
@@ -169,7 +169,7 @@ describe("spawn", () => {
         "my-app": {
           ...projectConfig,
           env: {
-            PATH: "/should/not/win",
+            PATH: "/project/toolchain/bin",
             GH_PATH: "/should/not/win",
           },
         },
@@ -180,10 +180,14 @@ describe("spawn", () => {
     await sm.spawn({ projectId: "my-app" });
 
     const call = (mockRuntime.create as ReturnType<typeof vi.fn>).mock.calls[0]?.[0];
-    expect(call?.environment?.PATH).not.toBe("/should/not/win");
+    // project.env.PATH must not REPLACE the built PATH — it is folded in as a
+    // prefix behind the wrapper dirs.
+    expect(call?.environment?.PATH).not.toBe("/project/toolchain/bin");
     // Use platform-aware path so the assertion works on both POSIX and Windows
     // (where buildAgentPath joins with backslashes via path.join).
     expect(call?.environment?.PATH).toContain(join(".ao", "bin"));
+    expect(call?.environment?.PATH?.startsWith("/project/toolchain/bin")).toBe(false);
+    expect(call?.environment?.PATH).toContain("/project/toolchain/bin");
     expect(call?.environment?.GH_PATH).not.toBe("/should/not/win");
     expect(call?.environment?.GH_PATH).toBe("/usr/local/bin/gh");
   });

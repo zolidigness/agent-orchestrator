@@ -44,12 +44,18 @@ const WRAPPER_VERSION = "0.8.0";
 /**
  * Build a PATH string with ~/.ao/bin prepended for wrapper interception.
  * Deduplicates entries and ensures /usr/local/bin is early for gh resolution.
+ *
+ * `pathPrefix` (a project's `env.PATH`, one or more delimiter-joined entries)
+ * is inserted after the wrapper dirs but ahead of the inherited PATH, so a
+ * project can pin toolchain dirs (e.g. a conda env's bin) without replacing
+ * the inherited PATH or shadowing the gh/git wrappers.
  */
-export function buildAgentPath(basePath: string | undefined): string {
+export function buildAgentPath(basePath: string | undefined, pathPrefix?: string): string {
   const delimiter = isWindows() ? ";" : ":";
   const inherited = (basePath ?? (isWindows() ? "" : DEFAULT_PATH))
     .split(delimiter)
     .filter(Boolean);
+  const prefix = (pathPrefix ?? "").split(delimiter).filter(Boolean);
   const ordered: string[] = [];
   const seen = new Set<string>();
 
@@ -64,6 +70,7 @@ export function buildAgentPath(basePath: string | undefined): string {
     add(PREFERRED_GH_BIN_DIR);
   }
 
+  for (const entry of prefix) add(entry);
   for (const entry of inherited) add(entry);
 
   return ordered.join(delimiter);
