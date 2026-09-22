@@ -1018,8 +1018,13 @@ async function setupHookInWorkspace(workspacePath: string): Promise<void> {
     await writeFile(activityPath, ACTIVITY_UPDATER_SCRIPT, "utf-8");
     await chmod(metadataPath, 0o755);
     await chmod(activityPath, 0o755);
-    metadataCommand = ".claude/metadata-updater.sh";
-    activityCommand = ".claude/activity-updater.sh";
+    // Anchor to $CLAUDE_PROJECT_DIR (set by Claude Code for every hook):
+    // hooks run in the session's CURRENT working directory, which follows the
+    // agent's `cd` — a bare relative path breaks the moment the agent works
+    // from a subdirectory ("/bin/sh: .claude/activity-updater.sh: No such
+    // file or directory" on every event).
+    metadataCommand = '"${CLAUDE_PROJECT_DIR:-.}"/.claude/metadata-updater.sh';
+    activityCommand = '"${CLAUDE_PROJECT_DIR:-.}"/.claude/activity-updater.sh';
   }
 
   let existingSettings: Record<string, unknown> = {};
@@ -1037,6 +1042,10 @@ async function setupHookInWorkspace(workspacePath: string): Promise<void> {
     upsertHookEntry(hooks, reg);
   }
   existingSettings["hooks"] = hooks;
+
+  // Agent commits are attributed to the operator's git identity only —
+  // suppress Claude Code's automatic Co-Authored-By trailer.
+  existingSettings["includeCoAuthoredBy"] = false;
 
   await writeFile(settingsPath, JSON.stringify(existingSettings, null, 2) + "\n", "utf-8");
 }

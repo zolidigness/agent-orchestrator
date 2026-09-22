@@ -889,8 +889,13 @@ describe("METADATA_UPDATER_SCRIPT content", () => {
 // =========================================================================
 // setupWorkspaceHooks / postLaunchSetup — hook path (symlink safety)
 // =========================================================================
-describe("hook setup — relative path (symlink-safe)", () => {
+describe("hook setup — $CLAUDE_PROJECT_DIR-anchored path (symlink- and cwd-safe)", () => {
   const agent = create();
+
+  // Not a baked absolute path (symlink-safe, identical across worktrees), and
+  // not a bare relative path either — hooks run in the session's CURRENT
+  // working directory, which follows the agent's `cd` into subdirectories.
+  const METADATA_CMD_UNIX = '"${CLAUDE_PROJECT_DIR:-.}"/.claude/metadata-updater.sh';
 
   /** Extract the hook command from the settings.json that was written */
   function getWrittenHookCommand(): string {
@@ -902,14 +907,14 @@ describe("hook setup — relative path (symlink-safe)", () => {
     return parsed.hooks.PostToolUse[0].hooks[0].command;
   }
 
-  it("setupWorkspaceHooks writes a relative hook command (not absolute)", async () => {
+  it("setupWorkspaceHooks writes a $CLAUDE_PROJECT_DIR-anchored hook command (not absolute)", async () => {
     await agent.setupWorkspaceHooks!(
       "/Users/equinox/.worktrees/integrator/integrator-5",
       {} as WorkspaceHooksConfig,
     );
 
     const hookCommand = getWrittenHookCommand();
-    expect(hookCommand).toBe(".claude/metadata-updater.sh");
+    expect(hookCommand).toBe(METADATA_CMD_UNIX);
     expect(hookCommand).not.toMatch(/^\//);
   });
 
@@ -950,7 +955,7 @@ describe("hook setup — relative path (symlink-safe)", () => {
     expect(content1).toBe(content2);
   });
 
-  it("updates an existing absolute hook path to relative", async () => {
+  it("updates an existing absolute hook path to the anchored form", async () => {
     mockExistsSync.mockReturnValue(true);
     mockReadFile.mockResolvedValue(
       JSON.stringify({
@@ -978,7 +983,7 @@ describe("hook setup — relative path (symlink-safe)", () => {
     );
 
     const hookCommand = getWrittenHookCommand();
-    expect(hookCommand).toBe(".claude/metadata-updater.sh");
+    expect(hookCommand).toBe(METADATA_CMD_UNIX);
   });
 
   it("still writes the script file to the correct absolute filesystem path", async () => {
@@ -1021,7 +1026,7 @@ describe("setupWorkspaceHooks — activity-updater (#1941)", () => {
   }
 
   /** Activity-updater command paths (unix vs win32) */
-  const ACTIVITY_CMD_UNIX = ".claude/activity-updater.sh";
+  const ACTIVITY_CMD_UNIX = '"${CLAUDE_PROJECT_DIR:-.}"/.claude/activity-updater.sh';
   const ACTIVITY_CMD_WIN = "node .claude/activity-updater.cjs";
 
   /**
